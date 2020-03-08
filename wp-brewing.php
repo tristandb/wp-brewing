@@ -1003,7 +1003,7 @@ class WP_Brewing {
         if ($time != null && $usage != USAGE_BOIL) {
             if (strlen($tt) > 0) { $tt .= ", "; }
             $tt .= $time;
-            if ($usage <= USAGE_WHIRLPOOL) {
+            if (($usage <= USAGE_WHIRLPOOL) && ($result != "Hauptgärung")) {
                 $tt .= " Minuten";
             } else {
                 $tt .= " Tage";
@@ -1015,7 +1015,7 @@ class WP_Brewing {
                                               'tt' => $tt,
                                               'value' => $result
                                           ]);
-        }
+	}
         return $result;
     }
 
@@ -1298,6 +1298,7 @@ class WP_Brewing {
             }
 
             if ($recipe["bjcp2015_style_id"]) {
+	        $sid = preg_replace('/^0/', '', $recipe["bjcp2015_style_id"]);
                 $content .= $this->formatString(
                     '<tr>
                        <td>Stil gemäß BJCP Guidelines (2015)</td>
@@ -1306,9 +1307,9 @@ class WP_Brewing {
                        <td colspan="2">{name}</td> <!-- finally we rely on the auto-generated glossary posts -->
                      </tr>',
                     [
-                        'style_id' => $recipe["bjcp2015_style_id"],
-                        'name' => $this->renderStyleName($recipe["bjcp2015_style_id"]),
-                        'tt' => $this->renderStyleName($recipe["bjcp2015_style_id"])
+                        'style_id' => $sid,
+                        'name' => $this->renderStyleName($sid),
+                        'tt' => $this->renderStyleName($sid)
                     ]);
             } elseif ($recipe["style"]) {
                 $content .= $this->formatString(
@@ -1374,7 +1375,7 @@ class WP_Brewing {
                        <td colspan="2">{stock}</td>
                      </tr>',
                     [
-                        'stock' => ($recipe["stock"]) ? $recipe["stock"] : "0"
+                        'stock' => ($recipe["stock"]) ? (($recipe["stock_source"]) ? '<span data-cmtooltip="' . $recipe["stock_source"] . '">' . $recipe["stock"] . '</span>' : $recipe["stock"]) : "0"
                     ]);
             }
 
@@ -2097,7 +2098,8 @@ class WP_Brewing {
                            <td><span data-cmtooltip="{tt_days}">{days}</span></t>
                          </tr>',
                         [
-                            'name' => $this->renderUsage($f["name"], $f["days"], $f["temp"]),
+                            // 'name' => $this->renderUsage($f["name"], $f["days"], $f["temp"]),
+                            'name' => $this->renderUsage($f["name"], null, null),
                             'days' => $days,
                             'temp' => $temp,
                             'tt_days' => $tt_days,
@@ -3538,13 +3540,15 @@ function wp_brewing_toggle_notes() {
             ]);
         }
 
-        $t = round((($bf_batch["bottlingDate"] / 1000) - ($bf_batch["fermentationStartDate"] / 1000)) / 86400);
-        if (($t >= 1) && ($t <= 30)) {
-            if (count($recipe["fermentation_steps"]) >= 1) {
-                $recipe["fermentation_steps"][0]["days"] = $t;
+        if ($bf_batch["bottlingDate"] && ($bf_batch["bottlingDate"] / 1000 < time())) {
+            $t = round((($bf_batch["bottlingDate"] / 1000) - ($bf_batch["fermentationStartDate"] / 1000)) / 86400);
+            if (($t >= 1) && ($t <= 30)) {
+                if (count($recipe["fermentation_steps"]) >= 1) {
+                    $recipe["fermentation_steps"][0]["days"] = $t;
+                }
             }
         }
-
+	
         $recipe["batch_notes"] = array();
         foreach ($bf_batch["notes"] as $note) {
             array_push($recipe["batch_notes"], [
@@ -3564,7 +3568,39 @@ function wp_brewing_toggle_notes() {
             $recipe["chloride"] = $bf_recipe["water"]["target"]["chloride"];
             $recipe["sulfate"] = $bf_recipe["water"]["target"]["sulfate"];
         }
-        
+
+	// get Plaato Keg data
+        $kegs = get_option('wp_brewing_plaato_keg_tokens', '');
+	if ($kegs) {
+	    $kegsarray = explode(" ", $kegs);
+	    $unit = null;
+	    foreach ($kegsarray as $keg) {
+		$parts = explode(":", $keg);
+		$plaato_keg = $parts[0];
+	        $url = "https://plaato.blynk.cc/" . $parts[1] . "/get/v64"; // name
+		$contents = file_get_contents($url);
+		if ($contents !== false) {
+		    $name  = json_decode($contents, true)[0];
+		    $name0 = explode(" ", $name)[0];
+		    // match complete name or first word (if no complete match yet)
+		    if (($name == $recipe["name"]) || (($unit == null) && ($name0 == explode(" ", $recipe["name"])[0]))) {
+		        $unit = "l";
+		    	$url = "https://plaato.blynk.cc/" . $parts[1] . "/get/v74"; // beer left unit
+			$contents = file_get_contents($url);
+			if ($contents !== false) {
+		            $unit = json_decode($contents, true)[0];
+			}
+		    	$url = "https://plaato.blynk.cc/" . $parts[1] . "/get/v51"; // beer left
+			$contents = file_get_contents($url);
+			if ($contents !== false) {
+		            $recipe["stock"] = number_format(json_decode($contents, true)[0], 1, ",", ".") . " " . $unit;
+			    $recipe["stock_source"] = "Plaato Keg: " . $plaato_keg;
+			}
+		    }
+		}
+	    }
+	}
+
         return $recipe;
     }
     
